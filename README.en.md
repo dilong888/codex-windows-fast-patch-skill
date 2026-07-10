@@ -19,6 +19,7 @@ Use this skill when Windows Codex Desktop updates cause issues like these:
 - Repair Goal entries, settings entries, or feature buttons that disappear or become disabled after updates.
 - Repair Desktop new-chat/thread-start failures caused by `dynamicTools` schema drift, including `missing field inputSchema` when the CLI smoke path still works.
 - Restore local conversations in the official sidebar after switching `model_provider` / API config when the local history data still exists; if a restored conversation is visible but cannot continue because its working directory is missing, recreate the missing empty directory from the rollout `cwd`.
+- Repair a specifically identified old conversation whose local `model` / `reasoning_effort` remains stale while Desktop already displays or requests a new model. This tool does not repair server-side model stream disconnects.
 - Repair broken local plugin marketplace config or `codex plugin list` errors.
 - Optionally back up and restore local Codex config, skills, marketplaces, and related state.
 - Automatically update this skill to the latest version before each repair attempt.
@@ -40,10 +41,12 @@ Do not run it on macOS. A macOS version needs a separate workflow for the Codex 
 - `scripts/patch-dynamic-tools-windows-msix.ps1`: Targeted MSIX / ASAR repair for Desktop `dynamicTools` schema drift that causes `missing field inputSchema` on new chat/thread start.
 - `scripts/patch-dynamic-tools-schema.cjs`: Electron bundle patcher used by the dynamicTools MSIX script.
 - `scripts/patch-remote-control-windows-msix.ps1`: Phone remote-control MSIX / ASAR patch and marker verification reference implementation.
+- `scripts/restore-codex-desktop-msix.ps1`: External recovery script for installing an already-built patched MSIX if an earlier phone remote-control install failed after removing the old package. It performs deployment preflight and writes a bounded status file by default; it never replaces an existing Desktop package.
 - `scripts/patch-remote-control-asar.cjs`: Phone remote-control Electron bundle patcher used by the MSIX script.
 - `scripts/build-remote-control-native-replacement.ps1`: Builds the patched native `app\resources\codex.exe` replacement under a caller-selected work root when the native app-server rejects API-key main auth; use `-CodexSourceRef` and `-AppServerVersion` to build a replacement whose app-server version matches the original native binary when the phone reports a version-expired state.
 - `scripts/install-computer-use-local.ps1`: Windows Computer Use local compatibility reference implementation.
 - `scripts/sync-codex-provider-history.ps1`: Sync local conversation provider metadata so conversations hidden after a `model_provider` switch reappear in the official list; `-RepairMissingCwdDirs` can also repair restored conversations that cannot continue because the recorded `cwd` directory is missing. It does not modify `config.toml` or workspace/project roots by default.
+- `scripts/sync-codex-thread-model.ps1`: Synchronize local `model` and `reasoning_effort` state for explicitly selected active user threads. It previews by default; `-Apply` is required to write SQLite and the matching rollout after creating timestamped backups.
 - `scripts/install-model-instructions-file.ps1`: Optional installer for the bundled `model_instructions_file` prompt asset.
 - `scripts/manage-codex-backups.ps1`: Backup manager for local Codex config, MCP, skills, and marketplaces.
 - `scripts/update-skill-from-github.ps1`: Best-effort self-update script that syncs the latest GitHub version before use.
@@ -120,6 +123,22 @@ Before starting from the external executor, confirm there is no global `CODEX_HO
 The phone remote-control install path downloads Windows SDK BuildTools from NuGet when `makeappx.exe` / `signtool.exe` are missing. It does not force a local proxy by default; if the machine must use one, pass `-BuildToolsProxy "http://127.0.0.1:10808"` or set `CODEX_WINDOWS_SDK_BUILDTOOLS_PROXY`. If `curl download failed with exit code 7` appears, first check whether an explicitly configured local proxy is not listening.
 
 Example request: `Use the codex-windows-fast-patch skill to inspect and repair Codex Desktop Fast Mode, language/locale, Chrome browser_use, plugin marketplace, and Computer Use availability on this Windows machine.`
+
+## Safe Recovery For A Built MSIX
+
+If an earlier installation flow failed after removing the old Desktop package, do not immediately rerun a package-replacing patch script. First use the recovery script from an **elevated external PowerShell** window. It adds the signing certificate to machine trust and runs preflight without installing:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\restore-codex-desktop-msix.ps1 -TrustMachineCertificate
+```
+
+The default status file is `$env:LOCALAPPDATA\CodexDesktopRecovery\status.json`. Only when it reports `READY_FOR_INSTALL`, run the following from the same elevated external PowerShell window:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\restore-codex-desktop-msix.ps1 -Install -Launch
+```
+
+The script refuses to stop, uninstall, or replace an installed `OpenAI.Codex` package. It does not read or write `.codex\auth.json`, OAuth data, paired-phone state, or the conversation database.
 
 Phone remote-control example request: `Use the codex-windows-fast-patch skill to repair Windows Codex Desktop phone remote control while preserving my third-party API provider and current conversation history. If large build artifacts are needed, keep them on D:\ or another non-system drive.`
 

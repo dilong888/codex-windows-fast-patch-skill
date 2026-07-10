@@ -19,6 +19,7 @@
 - 修复 Goal 入口、部分设置入口、功能按钮在更新后消失或变灰的问题。
 - 修复 Desktop `dynamicTools` schema 漂移导致新建对话 / thread start 报 `missing field inputSchema`，但 CLI smoke 路径仍然可用的问题。
 - 修复切换 `model_provider` / API 配置后，旧会话仍在本地但官方侧边栏不显示的问题；如果恢复后的会话能显示但继续时报“当前工作目录缺失”，可按 rollout 原始 `cwd` 创建缺失空目录。
+- 修复指定旧会话的本地 `model` / `reasoning_effort` 仍停留在旧值、而 Desktop 已显示或请求新模型的线程状态漂移；此工具不修复模型服务端断流。
 - 修复本地插件市场配置损坏、`codex plugin list` 报错的问题。
 - 可选备份和恢复本机 Codex 配置、技能、插件市场等关键状态。
 - 支持每次开始修复前自动将skills更新到最新版本
@@ -41,10 +42,12 @@
 - `scripts/patch-dynamic-tools-windows-msix.ps1`：用于修复 Desktop `dynamicTools` schema 漂移导致新建对话 / thread start 报 `missing field inputSchema` 的 targeted MSIX / ASAR 脚本。
 - `scripts/patch-dynamic-tools-schema.cjs`：dynamicTools MSIX 脚本使用的 Electron bundle patcher。
 - `scripts/patch-remote-control-windows-msix.ps1`：手机远控 MSIX / ASAR 补丁和 marker 校验参考实现。
+- `scripts/restore-codex-desktop-msix.ps1`：当一次手机远控 MSIX 安装在移除旧包后失败时，用于安装已生成修补包的外部恢复脚本。默认只做部署预检并写入状态文件；它不会替换已存在的 Desktop 包。
 - `scripts/patch-remote-control-asar.cjs`：手机远控 Electron bundle patcher。
 - `scripts/build-remote-control-native-replacement.ps1`：当 native app-server 因 API-key 主认证拒绝手机远控时，在指定工作目录下构建 patched `app\resources\codex.exe` replacement；如果手机提示版本过期，可用 `-CodexSourceRef` 和 `-AppServerVersion` 构建匹配原生 app-server 版本的 replacement。
 - `scripts/install-computer-use-local.ps1`：Windows Computer Use 本地兼容文件安装和校验参考实现。
 - `scripts/sync-codex-provider-history.ps1`：同步本地会话 provider 元数据，让切换 `model_provider` 后消失的会话重新出现在官方列表中；也可用 `-RepairMissingCwdDirs` 修复恢复后会话无法继续的缺失 `cwd` 目录。默认不改 `config.toml`，也不改 workspace/project roots。
+- `scripts/sync-codex-thread-model.ps1`：针对明确指定的非归档 user 线程，同步本地 `model` 和 `reasoning_effort` 状态。默认只预览；必须传入 `-Apply` 才会写入 SQLite 与对应 rollout，并在写入前创建时间戳备份。
 - `scripts/install-model-instructions-file.ps1`：可选安装内置 `model_instructions_file` 提示词资源。
 - `scripts/manage-codex-backups.ps1`：本地 Codex 配置、MCP、skills 和 marketplaces 的备份管理脚本。
 - `scripts/update-skill-from-github.ps1`：使用前尽力同步 GitHub 最新版本的自更新脚本。
@@ -125,6 +128,22 @@ Copy-Item -Recurse -Force -LiteralPath (Join-Path $source 'assets') -Destination
 ```text
 使用 codex-windows-fast-patch 这个 skill，检查并修复这台 Windows 机器上的 Codex Desktop Fast Mode、语言/locale、Chrome browser_use、插件市场和 Computer Use 可用性问题。
 ```
+
+## 已生成 MSIX 的安全恢复
+
+如果历史安装流程在移除旧 Desktop 包后失败，不要直接重跑会替换包的 patch 脚本。先在**管理员 PowerShell** 中运行恢复脚本；它会把指定 MSIX 的签名证书加入机器级信任，再进行不安装预检：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\restore-codex-desktop-msix.ps1 -TrustMachineCertificate
+```
+
+状态文件默认为 `$env:LOCALAPPDATA\CodexDesktopRecovery\status.json`。只有它显示 `READY_FOR_INSTALL` 时，才在同一个外部管理员 PowerShell 运行：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\restore-codex-desktop-msix.ps1 -Install -Launch
+```
+
+该脚本拒绝停止、卸载或替换一个已安装的 `OpenAI.Codex` 包；这能避免把正在工作的 Desktop 变成不可恢复状态。它也不读写 `.codex\auth.json`、OAuth、已配对手机或会话数据库。
 
 手机远控请求示例：
 
