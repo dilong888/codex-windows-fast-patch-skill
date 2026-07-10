@@ -42,6 +42,7 @@
 - `scripts/patch-dynamic-tools-windows-msix.ps1`：用于修复 Desktop `dynamicTools` schema 漂移导致新建对话 / thread start 报 `missing field inputSchema` 的 targeted MSIX / ASAR 脚本。
 - `scripts/patch-dynamic-tools-schema.cjs`：dynamicTools MSIX 脚本使用的 Electron bundle patcher。
 - `scripts/patch-remote-control-windows-msix.ps1`：手机远控 MSIX / ASAR 补丁和 marker 校验参考实现。
+- `scripts/restore-codex-desktop-msix.ps1`：当一次手机远控 MSIX 安装在移除旧包后失败时，用于安装已生成修补包的外部恢复脚本。默认只做部署预检并写入状态文件；它不会替换已存在的 Desktop 包。
 - `scripts/patch-remote-control-asar.cjs`：手机远控 Electron bundle patcher。
 - `scripts/build-remote-control-native-replacement.ps1`：当 native app-server 因 API-key 主认证拒绝手机远控时，在指定工作目录下构建 patched `app\resources\codex.exe` replacement；如果手机提示版本过期，可用 `-CodexSourceRef` 和 `-AppServerVersion` 构建匹配原生 app-server 版本的 replacement。
 - `scripts/install-computer-use-local.ps1`：Windows Computer Use 本地兼容文件安装和校验参考实现。
@@ -127,6 +128,22 @@ Copy-Item -Recurse -Force -LiteralPath (Join-Path $source 'assets') -Destination
 ```text
 使用 codex-windows-fast-patch 这个 skill，检查并修复这台 Windows 机器上的 Codex Desktop Fast Mode、语言/locale、Chrome browser_use、插件市场和 Computer Use 可用性问题。
 ```
+
+## 已生成 MSIX 的安全恢复
+
+如果历史安装流程在移除旧 Desktop 包后失败，不要直接重跑会替换包的 patch 脚本。先在**管理员 PowerShell** 中运行恢复脚本；它会把指定 MSIX 的签名证书加入机器级信任，再进行不安装预检：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\restore-codex-desktop-msix.ps1 -TrustMachineCertificate
+```
+
+状态文件默认为 `$env:LOCALAPPDATA\CodexDesktopRecovery\status.json`。只有它显示 `READY_FOR_INSTALL` 时，才在同一个外部管理员 PowerShell 运行：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\restore-codex-desktop-msix.ps1 -Install -Launch
+```
+
+该脚本拒绝停止、卸载或替换一个已安装的 `OpenAI.Codex` 包；这能避免把正在工作的 Desktop 变成不可恢复状态。它也不读写 `.codex\auth.json`、OAuth、已配对手机或会话数据库。
 
 手机远控请求示例：
 

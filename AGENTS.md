@@ -17,6 +17,9 @@
 
 - Never commit secrets, `auth.json`, API keys, OAuth tokens, private keys, browser profiles, local credential stores, or generated auth files.
 - Repairs that stop, uninstall, reinstall, repackage, or relaunch Codex Desktop must be run from an external executor such as Windows PowerShell or the VS Code Codex extension, not from the Codex Desktop session being repaired.
+- Treat the external-executor requirement as a handoff boundary, not as permission for the active Desktop session to start or background a destructive worker. The active Desktop session may perform only read-only triage and non-live candidate preparation; it must not invoke `-Install`, `Remove-AppxPackage`, `Add-AppxPackage`, `Stop-CodexDesktopProcesses`, or an equivalent replacement/relaunch action against a registered Desktop package.
+- Before any external deployment is presented to the user, independently validate the candidate MSIX signature and certificate trust/deployment prerequisites, preserve a recoverable package or installation path, and write bounded `READY_FOR_INSTALL`, `READY`, `NEEDS_ACTION`, or `FAILED` status. A successful signing command or ASAR dry run is not deployment proof.
+- Present the exact external command, expected impact, rollback path, and preflight result to the user. Run the destructive deployment only after the user explicitly confirms that specific action; on failure, restore the prior package and record `FAILED` instead of leaving Desktop unregistered.
 - The Desktop state target is `$env:USERPROFILE\.codex`. An isolated CLI home such as `$env:USERPROFILE\.codex-cli` is not Desktop state.
 - Do not set a global `CODEX_HOME`, and do not copy or migrate Desktop state into an isolated CLI home unless a user explicitly requests a separate migration plan.
 
