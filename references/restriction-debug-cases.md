@@ -198,6 +198,9 @@ Action:
 
 - Run `scripts\install-computer-use-local.ps1 -VerifyOnly` to rebuild the local bundled plugin mirror, stable cache links, CUA runtime overlay, Chrome native host paths, and config cleanup.
 - Run `scripts\install-computer-use-local.ps1 -StrictVerifyOnly` immediately after. Treat `client import ok` and `helper transport ok` as the local repair success signal.
+- If bootstrap reports a missing decoded `.pnpm\@...` dependency while an equivalent `%40...` directory exists in the active LocalAppData CUA runtime, `-RuntimeAliasRepairOnly` creates a decoded junction to that existing directory without copying or overwriting runtime files. Use `-RuntimeAliasVerifyOnly` to verify those junction targets independently; `-VerifyOnly` and `-StrictVerifyOnly` also cover the plugin, browser, and Chrome integration.
+- Validate the trusted path by importing the official `computer-use-client.mjs`; a task-top-level probe can be permission-isolated and report `nodeRepl.nativePipe` or `nodeRepl.config` as unavailable even when the official import works.
+- Use a newly launched Calculator window for screenshot smoke tests. Do not use Windows 11 Notepad because it may reuse an existing tabbed window containing unrelated or sensitive content.
 - If `-StrictVerifyOnly` fails because a cache link or plugin file is missing, rerun `-VerifyOnly` once, then rerun `-StrictVerifyOnly`.
 - In 26.609-style caches, `browser\latest` or `chrome\latest` may be absent while the versioned cache directory still exists. Do not treat that as a Computer Use failure by itself; require the versioned browser/chrome plugin manifests and only validate a support-plugin `latest` junction when it exists.
 - If verification succeeds but Desktop still reports native pipe unavailable, fully quit and relaunch Codex Desktop, then inspect the newest Desktop log for `computer-use native pipe startup ready`.
