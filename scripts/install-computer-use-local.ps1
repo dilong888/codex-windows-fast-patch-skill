@@ -4,6 +4,8 @@ param(
   [string]$PluginVersion = '0.1.0-local',
   [switch]$VerifyOnly,
   [switch]$StrictVerifyOnly,
+  [switch]$RuntimeAliasRepairOnly,
+  [switch]$RuntimeAliasVerifyOnly,
   [switch]$SkipUserEnvironment
 )
 
@@ -663,6 +665,111 @@ const { WindowsComputerUseClientBase } = await import(
   Write-Utf8NoBom $ClientPath ($content.Replace($oldImport, $replacement))
 }
 
+function Get-SkyDistPnpmDirectoryAliases {
+  param([string]$DistPath)
+
+  $pnpmRoot = Join-Path $DistPath 'node_modules\.pnpm'
+  if (-not (Test-Path -LiteralPath $pnpmRoot -PathType Container)) {
+    return @()
+  }
+
+  return @(
+    foreach ($entry in (Get-ChildItem -LiteralPath $pnpmRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+      if (-not $entry.Name.Contains('%40')) {
+        continue
+      }
+
+      $aliasName = $entry.Name -replace '%40', '@'
+      if ($aliasName -eq $entry.Name) {
+        continue
+      }
+
+      [pscustomobject]@{
+        SourcePath = $entry.FullName
+        AliasPath = Join-Path $pnpmRoot $aliasName
+      }
+    }
+  )
+}
+
+function Assert-SkyDistPnpmDirectoryAliases {
+  param([string]$DistPath)
+
+  foreach ($alias in @(Get-SkyDistPnpmDirectoryAliases $DistPath)) {
+    if (-not (Test-Path -LiteralPath $alias.AliasPath -PathType Container)) {
+      throw "Computer Use runtime .pnpm alias is missing: $($alias.AliasPath)"
+    }
+
+    $item = Get-Item -LiteralPath $alias.AliasPath -Force
+    $isJunction = (
+      ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -and
+      $item.LinkType -eq 'Junction'
+    )
+    $target = [string]($item.Target -join ';')
+    if (-not $isJunction -or -not $target.Equals($alias.SourcePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Computer Use runtime .pnpm alias is unmanaged or points elsewhere: $($alias.AliasPath)"
+    }
+  }
+}
+
+function Ensure-SkyDistPnpmDirectoryAliases {
+  param([string]$DistPath)
+
+  $created = 0
+  foreach ($alias in @(Get-SkyDistPnpmDirectoryAliases $DistPath)) {
+    if (Test-Path -LiteralPath $alias.AliasPath) {
+      $item = Get-Item -LiteralPath $alias.AliasPath -Force
+      $target = [string]($item.Target -join ';')
+      $isManagedJunction = (
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -and
+        $item.LinkType -eq 'Junction' -and
+        $target.Equals($alias.SourcePath, [System.StringComparison]::OrdinalIgnoreCase)
+      )
+      if (-not $isManagedJunction) {
+        throw "refusing to replace existing Computer Use runtime .pnpm alias path: $($alias.AliasPath)"
+      }
+      continue
+    }
+
+    New-Item -ItemType Junction -Path $alias.AliasPath -Target $alias.SourcePath | Out-Null
+    $created += 1
+  }
+
+  Assert-SkyDistPnpmDirectoryAliases $DistPath
+  if ($created -gt 0) {
+    Write-Log "created decoded .pnpm directory aliases in the official Computer Use runtime: $created"
+  }
+}
+
+function Test-IsLocalCuaRuntimePath {
+  param([string]$Path)
+
+  $runtimeRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\runtimes\cua_node')
+  ).TrimEnd('\') + '\'
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  return $fullPath.StartsWith($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Repair-CuaRuntimePnpmDirectoryAliases {
+  $runtimeSkyRoot = Get-CuaSkyRuntimeRoot
+  if (-not (Test-IsLocalCuaRuntimePath $runtimeSkyRoot)) {
+    Write-Log "warning: selected CUA runtime is inside the installed package; skipping in-place .pnpm alias repair: $runtimeSkyRoot"
+    return
+  }
+
+  Ensure-SkyDistPnpmDirectoryAliases (Join-Path $runtimeSkyRoot 'dist')
+}
+
+function Test-CuaRuntimePnpmDirectoryAliases {
+  $runtimeSkyRoot = Get-CuaSkyRuntimeRoot
+  if (-not (Test-IsLocalCuaRuntimePath $runtimeSkyRoot)) {
+    throw "no writable LocalAppData CUA runtime was selected for .pnpm alias verification: $runtimeSkyRoot"
+  }
+
+  Assert-SkyDistPnpmDirectoryAliases (Join-Path $runtimeSkyRoot 'dist')
+}
+
 function Write-PluginTree {
   param([string]$Root)
 
@@ -811,17 +918,23 @@ tomllib.loads(path.read_text(encoding="utf-8"))
 function Get-CuaSkyRuntimeRoot {
   $runtimeRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\runtimes\cua_node'
   $candidates = @()
+  $skyRelativeRoots = @(
+    'bin\node_modules\@oai\sky',
+    'bin\node_modules\%40oai\sky'
+  )
 
   if (Test-Path -LiteralPath $runtimeRoot -PathType Container) {
     $candidates += foreach ($runtime in (Get-ChildItem -LiteralPath $runtimeRoot -Directory -ErrorAction SilentlyContinue)) {
-      $skyRoot = Join-Path $runtime.FullName 'bin\node_modules\@oai\sky'
-      $basePath = Join-Path $skyRoot 'dist\project\cua\sky_js\src\targets\windows\internal\computer_use_client_base.js'
-      $packagePath = Join-Path $skyRoot 'package.json'
-      if ((Test-Path -LiteralPath $basePath -PathType Leaf) -and (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
-        $packageItem = Get-Item -LiteralPath $packagePath
-        [pscustomobject]@{
-          Path = $skyRoot
-          LastWriteTime = $packageItem.LastWriteTime
+      foreach ($relativeRoot in $skyRelativeRoots) {
+        $skyRoot = Join-Path $runtime.FullName $relativeRoot
+        $basePath = Join-Path $skyRoot 'dist\project\cua\sky_js\src\targets\windows\internal\computer_use_client_base.js'
+        $packagePath = Join-Path $skyRoot 'package.json'
+        if ((Test-Path -LiteralPath $basePath -PathType Leaf) -and (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+          $packageItem = Get-Item -LiteralPath $packagePath
+          [pscustomobject]@{
+            Path = $skyRoot
+            LastWriteTime = $packageItem.LastWriteTime
+          }
         }
       }
     }
@@ -1380,6 +1493,7 @@ function Install-ComputerUse {
   Assert-UnderPath $pluginSourceRoot $marketplaceRoot
   Assert-UnderPath $latestPath $cacheRoot
 
+  Repair-CuaRuntimePnpmDirectoryAliases
   Remove-StaleChromeNativeHostEntries
   Sync-BundledMarketplaceFromInstalledApp $marketplaceRoot
   Write-PluginTree $pluginSourceRoot
@@ -1483,9 +1597,23 @@ function Test-ComputerUse {
   }
 
   Test-CodexConfig (Join-Path $codexHomeResolved 'config.toml') $marketplaceRoot
+  Test-CuaRuntimePnpmDirectoryAliases
   Test-ComputerUseClientImport $computerUseClientPath
   Test-HelperTransport $helperTransportPath
   Write-Log 'verification ok'
+}
+
+if ($RuntimeAliasRepairOnly) {
+  Repair-CuaRuntimePnpmDirectoryAliases
+  Test-CuaRuntimePnpmDirectoryAliases
+  Write-Log 'runtime .pnpm alias repair ok'
+  exit 0
+}
+
+if ($RuntimeAliasVerifyOnly) {
+  Test-CuaRuntimePnpmDirectoryAliases
+  Write-Log 'runtime .pnpm alias verification ok'
+  exit 0
 }
 
 if ($StrictVerifyOnly) {
